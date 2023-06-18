@@ -4,19 +4,17 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QTabWidget, \
     QVBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QFileDialog, QMessageBox
-
+from PyQt5.QtGui import QImage
 import tensorflow
+import cv2
 from keras.utils import load_img, img_to_array
 from keras.models import load_model
 import sys
 import pandas as pd
 import os
 
-train_set = pd.read_pickle('C:/Users/Yaroslavel/sample/new_test_set.pkl')
-disease_labels = ['Atelectasis',
-                  'Consolidation', 'Infiltration', 'Pneumothorax', 'Edema', 'Emphysema',
-                  'Fibrosis', 'Effusion', 'Pneumonia', 'Pleural_Thickening',
-                  'Cardiomegaly', 'Nodule', 'Mass', 'Hernia']
+train_set = pd.read_pickle('final_test_set.pkl')
+disease_labels = train_set.columns.to_list()[5:]
 map_characters = {}
 for i in range(0, len(disease_labels)):
     map_characters[i] = disease_labels[i]
@@ -160,13 +158,13 @@ class Window(QMainWindow):
             messagebox.exec_()
             return
         current_image = self.logo.selectedItem if len(self.selected_item) == 0 else self.selected_item
-        print('cur-image', current_image)
+        print('cur-image', current_image.split('/'))
         result = predict_by_image(current_image, self.model)
         i = 0
         for k, v in result.items():
             self.lstView.insertItem(i, f'{k} = {round(100 * v, 2)}%')
             i += 1
-        actual_disease = information_about_patient(current_image.split('/')[-1], train_set)
+        actual_disease = information_about_patient(current_image.split('/')[-1])
         print(actual_disease)
         for i in range(len(actual_disease)):
             self.actual_disease.insertItem(i, actual_disease[i])
@@ -196,21 +194,52 @@ class Window(QMainWindow):
         else:
             path_to_image = path_to_image[0]
             self.selected_item = path_to_image
-            self.logo.setPixmap(QPixmap(path_to_image).scaled(self.logo.width(), self.logo.height()))
+            print('self.selected_item', self.selected_item)
+            input_img = cv2.imread(self.selected_item)
+            enhanced_img = NormalizeContrastSharpnes(input_img)
+            h,w,ch = enhanced_img .shape
+            bytes_per_line = ch * w
+            convert_to_Qt_format = QImage(enhanced_img .data,w,h,bytes_per_line,QImage.Format_RGB888)
+            #print(current_img)
+            #final_img = NormalizeContrastSharpnes(current_img)
+            p = convert_to_Qt_format.scaled(self.logo.width(),self.logo.height())
+            result_img  = QPixmap.fromImage(p)
+            self.logo.setPixmap(result_img)
+            #self.logo.setPixmap(QPixmap(path_to_image).scaled(self.logo.width(), self.logo.height()))
 
 
-def information_about_patient(filename, dataframe):
+def NormalizeContrastSharpnes(img):
+    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+    l_channel, a, b = cv2.split(lab)
+
+    # Applying CLAHE to L-channel
+    # feel free to try different values for the limit and grid size:
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    cl = clahe.apply(l_channel)
+
+    # merge the CLAHE enhanced L-channel with the a and b channel
+    limg = cv2.merge((cl, a, b))
+
+    # Converting image from LAB Color model to BGR color spcae
+    enhanced_img = cv2.cvtColor(limg, cv2.COLOR_LAB2BGR)
+
+    # Stacking the original image with the enhanced image
+    #kernel = np.array([[-1, -1, -1], [-1, 9, -1], [-1, -1, -1]])
+    #sharped_img = cv2.filter2D(src=enhanced_img, ddepth=-1, kernel=kernel)
+    return enhanced_img
+
+def information_about_patient(filename):
     '''
     Принимает путь к изображение и искомую выборку данных
     Возвращает список из всех инфекций грудной клетки
     '''
-    new_df = dataframe[dataframe['filename'] == filename]
+    new_df = train_set[train_set['filename'] == filename]
     list_disease = str(new_df['disease'].to_list()[0]).split('|')
     id_by_patient = new_df['patientID'].to_list()[0]
-    dataframe_by_id = dataframe[dataframe['patientID'] == id_by_patient].disease
+    dataframe_by_id = train_set[train_set['patientID'] == id_by_patient].disease
     for disease in dataframe_by_id:
         for i in disease.split('|'):
-            if i not in list_disease and i != 'No Finding':
+            if i not in list_disease:
                 list_disease.append(i)
     return list_disease
 
@@ -247,7 +276,7 @@ def predict_by_image(path_to_image, uploaded_model):
     Возвращает словарь болезней с вероятносями по убыванию
     '''
     # image to array
-    image = load_img(path_to_image, target_size=(128, 128))
+    image = load_img(path_to_image, target_size=(224, 224))
     img_tensor = img_to_array(image)
     img_tensor /= 255
     img_tensor = np.expand_dims(img_tensor, axis=0)
